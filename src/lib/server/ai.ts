@@ -23,6 +23,7 @@ import {
 	normalize
 } from '../constants.ts';
 import { llmJson } from './llm.ts';
+import { TIME_ZONE, prLocalToIso, prToday } from '../constants.ts';
 
 // ---------------------------------------------------------------------------
 // 1. Intake
@@ -351,11 +352,10 @@ function buildSlots(
 	n = Math.max(1, Math.min(12, n ?? 1));
 	const starts: string[] = [];
 	for (let i = 0; i < n; i++) {
-		const d = new Date(day);
-		d.setHours(0, startMin + i * dur, 0, 0);
-		starts.push(d.toISOString());
+		// `day` is UTC midnight of the Puerto Rico calendar date; the clinic's clock is UTC-4.
+		starts.push(prLocalToIso(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), startMin + i * dur));
 	}
-	const label = day.toLocaleDateString('es-PR', { weekday: 'long', day: 'numeric', month: 'short' });
+	const label = day.toLocaleDateString('es-PR', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'UTC' });
 	return { startsAt: starts, durationMin: dur, summary: `${n} turno${n > 1 ? 's' : ''} de ${dur} min el ${label}` };
 }
 
@@ -366,21 +366,21 @@ function rulesClinicCommand(text: string, now: Date): ClinicCommand | null {
 	const cm = t.match(/(\d+|un|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|one|two|three|four|five|six|seven|eight|nine|ten)\s+(turnos?|citas?|espacios?|slots?|appointments?)/);
 	if (cm) count = /^\d+$/.test(cm[1]) ? parseInt(cm[1], 10) : NUMBER_WORDS[cm[1]];
 
-	const day = new Date(now);
-	day.setHours(0, 0, 0, 0);
+	const pr = prToday(now);
+	const day = new Date(Date.UTC(pr.y, pr.m - 1, pr.d)); // Puerto Rico date, as UTC midnight
 	if (/\bhoy\b|\btoday\b/.test(t)) {
 		// today
 	} else if (/pasado manana/.test(t)) {
-		day.setDate(day.getDate() + 2);
+		day.setUTCDate(day.getUTCDate() + 2);
 	} else if (/(?<!la )\bmanana\b|\btomorrow\b/.test(t)) {
-		day.setDate(day.getDate() + 1);
+		day.setUTCDate(day.getUTCDate() + 1);
 	} else {
 		const found = DAY_INDEX.find(([re]) => re.test(t));
 		if (found) {
-			const diff = (found[1] - day.getDay() + 7) % 7 || 7;
-			day.setDate(day.getDate() + diff);
+			const diff = (found[1] - day.getUTCDay() + 7) % 7 || 7;
+			day.setUTCDate(day.getUTCDate() + diff);
 		} else {
-			day.setDate(day.getDate() + 1); // default: tomorrow
+			day.setUTCDate(day.getUTCDate() + 1); // default: tomorrow
 		}
 	}
 
@@ -413,8 +413,9 @@ function rulesClinicCommand(text: string, now: Date): ClinicCommand | null {
 
 export async function parseClinicCommand(text: string, now = new Date()): Promise<ClinicCommand | null> {
 	const pad = (n: number) => String(n).padStart(2, '0');
-	const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-	const weekday = now.toLocaleDateString('es-PR', { weekday: 'long' });
+	const pr = prToday(now);
+	const today = `${pr.y}-${pad(pr.m)}-${pad(pr.d)}`;
+	const weekday = now.toLocaleDateString('es-PR', { weekday: 'long', timeZone: TIME_ZONE });
 
 	const llm = await llmJson<{ date?: string; start?: string; end?: string | null; count?: number | null; duration_min?: number | null }>(
 		`A clinic clerk in Puerto Rico is opening appointment slots by voice. Today is ${weekday} ${today}.
@@ -488,7 +489,7 @@ if (typeof p.date !== 'string' || typeof p.start !== 'string') return null;
 if (!/^\d{4}-\d{2}-\d{2}$/.test(p.date) || !/^\d{1,2}:\d{2}$/.test(p.start)) return null;
 const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : null);
 const [y, m, d] = p.date.split('-').map(Number);
-const day = new Date(y, m - 1, d);
+const day = new Date(Date.UTC(y, m - 1, d));
 const [sh, sm] = p.start.split(':').map(Number);
 let end: number | null = null;
 if (typeof p.end === 'string' && /^\d{1,2}:\d{2}$/.test(p.end)) {

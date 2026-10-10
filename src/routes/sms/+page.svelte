@@ -19,7 +19,7 @@
 	});
 
 	const time = (iso: string) =>
-		new Date(iso).toLocaleTimeString('es-PR', { hour: 'numeric', minute: '2-digit' });
+		new Date(iso).toLocaleTimeString('es-PR', { hour: 'numeric', minute: '2-digit', timeZone: 'America/Puerto_Rico' });
 </script>
 
 <svelte:head><title>Mis mensajes · TurnoListo</title></svelte:head>

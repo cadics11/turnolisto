@@ -7,9 +7,9 @@ export const DEFAULT_MODEL = 'gemini-2.5-flash-native-audio-preview-09-2025';
 
 /** @param {Date} now */
 export function buildInstructions(now) {
-	const pad = (/** @type {number} */ n) => String(n).padStart(2, '0');
-	const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-	const weekday = now.toLocaleDateString('es-PR', { weekday: 'long' });
+	// Puerto Rico date, not the server's (Vercel runs in UTC).
+	const today = now.toLocaleDateString('en-CA', { timeZone: 'America/Puerto_Rico' });
+	const weekday = now.toLocaleDateString('es-PR', { weekday: 'long', timeZone: 'America/Puerto_Rico' });
 	return {
 		nueva: [
 			'Eres el asistente de voz de TurnoListo en Puerto Rico. Ayudas a un paciente a pedir una cita con un especialista.',

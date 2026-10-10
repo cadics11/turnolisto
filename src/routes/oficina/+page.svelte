@@ -3,7 +3,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import Logo from '#lib/components/Logo.svelte';
 	import LiveAssistant from '#lib/components/LiveAssistant.svelte';
-	import { formatPhone, formatSlot } from '#lib/constants.ts';
+	import { formatPhone, formatSlot, prLocalToIso, prToday } from '#lib/constants.ts';
 	import { VoiceInput } from '#lib/voice.svelte.ts';
 	import type { PageProps } from './$types';
 
@@ -19,10 +19,11 @@
 	});
 
 	const tomorrow = (() => {
-		const d = new Date();
-		d.setDate(d.getDate() + 1);
+		// Tomorrow in Puerto Rico, whatever timezone this browser is in.
+		const t = prToday();
+		const d = prToday(new Date(prLocalToIso(t.y, t.m, t.d, 24 * 60)));
 		const p = (n: number) => String(n).padStart(2, '0');
-		return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+		return `${d.y}-${p(d.m)}-${p(d.d)}`;
 	})();
 
 	$effect(() => {

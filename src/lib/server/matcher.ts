@@ -8,7 +8,7 @@
 //    alert goes by SMS unless the patient turned SMS alerts off (then it shows in the app).
 //  - Clinics never browse or choose patients.
 //  - Patient name/phone are revealed to the clinic only once the slot is booked.
-import { OFFER_MINUTES, formatSlot } from '../constants.ts';
+import { OFFER_MINUTES, formatSlot, prDayKey } from '../constants.ts';
 import { formatMiles } from '../geo.ts';
 import type { OpeningCard } from '../types.ts';
 import { INTENT_NOTE, parseSmsReply } from './ai.ts';
@@ -285,14 +285,14 @@ export async function handleInboundSms(phone: string, body: string) {
 
 	if (intent === 'other_time') {
 		// Look for another open slot at the same clinic on the same day.
-		const sameDay = new Date(slot.startsAt).toDateString();
+		const sameDay = prDayKey(slot.startsAt);
 		const alt = d.slots
 			.filter(
 				(s) =>
 					s.id !== slot.id &&
 					s.clinicId === slot.clinicId &&
 					s.status === 'open' &&
-					new Date(s.startsAt).toDateString() === sameDay &&
+					prDayKey(s.startsAt) === sameDay &&
 					s.acceptedPlans.includes(req.plan)
 			)
 			.sort((a, b) => a.startsAt.localeCompare(b.startsAt))
@@ -302,7 +302,7 @@ export async function handleInboundSms(phone: string, body: string) {
 					s.id !== slot.id &&
 					s.clinicId === slot.clinicId &&
 					s.status === 'open' &&
-					new Date(s.startsAt).toDateString() === sameDay &&
+					prDayKey(s.startsAt) === sameDay &&
 					s.acceptedPlans.includes(req.plan)
 			);
 

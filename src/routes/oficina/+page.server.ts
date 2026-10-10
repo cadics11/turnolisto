@@ -1,5 +1,5 @@
 import { error, fail } from '@sveltejs/kit';
-import { PLANS } from '#lib/constants.ts';
+import { PLANS, prLocalToIso, prToday } from '#lib/constants.ts';
 import { parseCoordsForm } from '#lib/geo.ts';
 import { parseClinicCommand } from '#lib/server/ai.ts';
 import { config } from '#lib/server/config.ts';
@@ -19,8 +19,8 @@ function getClinic(user: App.Locals['user']): Clinic {
 export const load: PageServerLoad = ({ locals }) => {
 	const d = db();
 	const clinic = getClinic(locals.user);
-	const startOfToday = new Date();
-	startOfToday.setHours(0, 0, 0, 0);
+	const pr = prToday();
+	const startOfToday = new Date(prLocalToIso(pr.y, pr.m, pr.d, 0));
 
 	const slots = d.slots
 		.filter((s) => s.clinicId === clinic.id && new Date(s.startsAt) >= startOfToday)
@@ -107,7 +107,7 @@ export const actions: Actions = {
 
 		const starts: string[] = [];
 		for (let t = startMin; t + duration <= endMin && starts.length < 24; t += duration) {
-			starts.push(new Date(y, m - 1, d, 0, t).toISOString());
+			starts.push(prLocalToIso(y, m, d, t));
 		}
 		if (!starts.length) return fail(400, { message: 'El rango es más corto que un turno.' });
 		addSlots(clinic, starts, duration);

@@ -99,11 +99,43 @@ export function formatPhone(digits: string): string {
 	return `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}`;
 }
 
+/**
+ * All appointment times are Puerto Rico time, whatever timezone the server (Vercel runs in UTC)
+ * or the browser is in. Puerto Rico is UTC-4 all year (no daylight saving).
+ */
+export const TIME_ZONE = 'America/Puerto_Rico';
+const PR_UTC_OFFSET_MIN = 240;
+
+/** Calendar date and weekday (0 = Sunday) in Puerto Rico right now, or at `date`. */
+export function prToday(date = new Date()): { y: number; m: number; d: number; weekday: number } {
+const p = Object.fromEntries(
+new Intl.DateTimeFormat('en-US', { timeZone: TIME_ZONE, year: 'numeric', month: 'numeric', day: 'numeric' })
+.formatToParts(date)
+.map((x) => [x.type, x.value])
+);
+const y = Number(p.year);
+const m = Number(p.month);
+const d = Number(p.day);
+return { y, m, d, weekday: new Date(Date.UTC(y, m - 1, d)).getUTCDay() };
+}
+
+/** ISO instant for `minutes` after midnight on a Puerto Rico calendar date. */
+export function prLocalToIso(y: number, m: number, d: number, minutes: number): string {
+return new Date(Date.UTC(y, m - 1, d, 0, minutes + PR_UTC_OFFSET_MIN)).toISOString();
+}
+
+/** Puerto Rico calendar day of an instant, e.g. "2026-10-10". Handy for "same day" checks. */
+export function prDayKey(iso: string): string {
+const { y, m, d } = prToday(new Date(iso));
+return `${y}-${m}-${d}`;
+}
+
 export function formatSlot(iso: string): { day: string; time: string; full: string } {
-	const d = new Date(iso);
-	const day = d.toLocaleDateString('es-PR', { weekday: 'short', day: 'numeric', month: 'short' });
-	const time = d.toLocaleTimeString('es-PR', { hour: 'numeric', minute: '2-digit' });
-	const full = d.toLocaleString('es-PR', {
+const d = new Date(iso);
+const day = d.toLocaleDateString('es-PR', { weekday: 'short', day: 'numeric', month: 'short', timeZone: TIME_ZONE });
+const time = d.toLocaleTimeString('es-PR', { hour: 'numeric', minute: '2-digit', timeZone: TIME_ZONE });
+const full = d.toLocaleString('es-PR', {
+		timeZone: TIME_ZONE,
 		weekday: 'long',
 		day: 'numeric',
 		month: 'short',
