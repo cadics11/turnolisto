@@ -1,0 +1,30 @@
+@import 'tailwindcss';
+@plugin '@tailwindcss/forms';
+
+@theme {
+	--font-display: 'Bricolage Grotesque', ui-sans-serif, system-ui, sans-serif;
+	--font-sans: 'Figtree', ui-sans-serif, system-ui, sans-serif;
+
+	--color-paper: #f5f4ef;
+	--color-ink: #13231f;
+	--color-accent: #0b6b5c;
+	--color-accent-dark: #084f44;
+	--color-accent-soft: #e3f1ec;
+	--color-mint: #9fd8c8;
+	--color-line: #dedfd8;
+	--color-line-strong: #c9ccc4;
+	--color-muted: #4f5b57;
+	--color-muted-strong: #3f5550;
+	--color-warn-bg: #f3e9cf;
+	--color-warn: #6b4e0f;
+	--color-danger-bg: #f3e1da;
+	--color-danger: #8a2f14;
+	--color-info-bg: #e6ecf5;
+	--color-info: #1f3f6e;
+}
+
+body {
+	background: var(--color-paper);
+	color: var(--color-ink);
+	font-family: var(--font-sans);
+}
