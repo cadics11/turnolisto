@@ -1,9 +1,10 @@
-// Tiny JSON-file database. Zero native dependencies; open data/turnolisto.json to
-// see everything. It starts EMPTY: every user, clinic, request and slot is real data
-// created through the app. Swap for SQLite/Postgres before heavy use.
+// Tiny document database: one JSON document, kept in Turso (libSQL) when TURSO_DATABASE_URL
+// is set (required on Vercel), otherwise in data/turnolisto.json. It starts EMPTY: every
+// user, clinic, request and slot is real data created through the app.
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
+import { createClient, type Client } from '@libsql/client';
 
 export type Clinic = {
 	id: string;
@@ -111,36 +112,95 @@ export type DB = {
 
 const FILE = path.resolve('data', 'turnolisto.json');
 
-const g = globalThis as unknown as { __turnolistoDb?: DB };
+const g = globalThis as unknown as {
+__turnolistoDb?: DB;
+__turnolistoTurso?: Client;
+__turnolistoPending?: Promise<unknown>;
+};
 
 function empty(): DB {
-	return { users: [], sessions: [], clinics: [], requests: [], slots: [], offers: [], sms: [], counter: 0 };
+return { users: [], sessions: [], clinics: [], requests: [], slots: [], offers: [], sms: [], counter: 0 };
+}
+
+/** Turso (libSQL) is used when TURSO_DATABASE_URL is set; otherwise the local JSON file. */
+function turso(): Client | null {
+const url = (process.env.TURSO_DATABASE_URL ?? '').trim();
+if (!url) return null;
+return (g.__turnolistoTurso ??= createClient({
+url,
+authToken: (process.env.TURSO_AUTH_TOKEN ?? '').trim() || undefined
+}));
+}
+
+function normalize(raw: Partial<DB>): DB {
+// Merge over defaults so data written by older versions still loads.
+const d = { ...empty(), ...raw };
+for (const u of d.users) {
+u.smsAlerts ??= true;
+u.lat ??= null;
+u.lng ??= null;
+}
+return d;
+}
+
+/**
+ * Load the database. With Turso this re-reads the data every call (serverless instances
+ * do not share memory), so call it once at the start of each request. Locally it only
+ * reads the file the first time.
+ */
+export async function loadDb(): Promise<void> {
+const client = turso();
+if (client) {
+await client.execute('CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)');
+const res = await client.execute({ sql: 'SELECT value FROM kv WHERE key = ?', args: ['db'] });
+const row = res.rows[0];
+g.__turnolistoDb = row ? normalize(JSON.parse(String(row.value)) as Partial<DB>) : empty();
+return;
+}
+if (g.__turnolistoDb) return;
+if (fs.existsSync(FILE)) {
+g.__turnolistoDb = normalize(JSON.parse(fs.readFileSync(FILE, 'utf8')) as Partial<DB>);
+} else {
+g.__turnolistoDb = empty();
+save();
+}
 }
 
 export function db(): DB {
-	if (!g.__turnolistoDb) {
-		if (fs.existsSync(FILE)) {
-			// Merge over defaults so files written by older versions still load.
-			g.__turnolistoDb = { ...empty(), ...(JSON.parse(fs.readFileSync(FILE, 'utf8')) as Partial<DB>) };
-			for (const u of g.__turnolistoDb.users) {
-				u.smsAlerts ??= true;
-				u.lat ??= null;
-				u.lng ??= null;
-			}
-		} else {
-			g.__turnolistoDb = empty();
-			save();
-		}
-	}
-	return g.__turnolistoDb;
+if (!g.__turnolistoDb) {
+if (turso()) throw new Error('Database not loaded: await loadDb() first');
+g.__turnolistoDb = empty();
+}
+return g.__turnolistoDb;
 }
 
-/** Write to a temp file and rename, so a crash never leaves a half-written database. */
+/** Persist the database. With Turso the write is queued; await flush() before responding. */
 export function save() {
-	fs.mkdirSync(path.dirname(FILE), { recursive: true });
-	const tmp = FILE + '.tmp';
-	fs.writeFileSync(tmp, JSON.stringify(g.__turnolistoDb, null, 2));
-	fs.renameSync(tmp, FILE);
+const client = turso();
+const json = JSON.stringify(g.__turnolistoDb);
+if (client) {
+const write = client.execute({
+sql: 'INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+args: ['db', json]
+});
+const prev = g.__turnolistoPending ?? Promise.resolve();
+// Chain so writes land in order; keep failures visible to flush().
+g.__turnolistoPending = prev.then(() => write);
+g.__turnolistoPending.catch(() => {});
+return;
+}
+// Local file: write to a temp file and rename, so a crash never leaves a half-written database.
+fs.mkdirSync(path.dirname(FILE), { recursive: true });
+const tmp = FILE + '.tmp';
+fs.writeFileSync(tmp, JSON.stringify(g.__turnolistoDb, null, 2));
+fs.renameSync(tmp, FILE);
+}
+
+/** Wait for all pending Turso writes. Call before a serverless response finishes. */
+export async function flush(): Promise<void> {
+const p = g.__turnolistoPending;
+g.__turnolistoPending = undefined;
+if (p) await p;
 }
 
 export const uid = () => randomUUID();

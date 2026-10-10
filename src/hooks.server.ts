@@ -2,13 +2,13 @@ import { redirect } from '@sveltejs/kit';
 import type { Handle } from '@sveltejs/kit/hooks';
 import { expireOffers } from '#lib/server/matcher.ts';
 import { SESSION_COOKIE, homeFor } from '#lib/server/auth.ts';
-import { userForSession } from '#lib/server/store.ts';
+import { userForSession, loadDb, flush } from '#lib/server/store.ts';
 
 // Check for expired SMS offers every 30 seconds.
 const g = globalThis as unknown as { __turnolistoTimer?: ReturnType<typeof setInterval> };
 if (!g.__turnolistoTimer) {
 	g.__turnolistoTimer = setInterval(() => {
-		expireOffers().catch((e) => console.error('[expireOffers]', e));
+		loadDb().then(() => expireOffers()).then(flush).catch((e) => console.error('[expireOffers]', e));
 	}, 30_000);
 }
 
@@ -24,7 +24,16 @@ const GUARDED: { prefix: string; role: 'patient' | 'clinic' }[] = [
 	{ prefix: '/oficina', role: 'clinic' }
 ];
 
-export const handle: Handle = async ({ event, resolve }) => {
+export const handle: Handle = async (input) => {
+	await loadDb();
+	try {
+		return await handleInner(input);
+	} finally {
+		await flush();
+	}
+};
+
+const handleInner: Handle = async ({ event, resolve }) => {
 	event.locals.user = userForSession(event.cookies.get(SESSION_COOKIE));
 
 	const path = event.url.pathname;
