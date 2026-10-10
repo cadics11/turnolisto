@@ -11,14 +11,6 @@ const { handler } = await import('./build/handler.js');
 
 const port = Number(process.env.PORT ?? 3000);
 
-// Load .env so GEMINI_API_KEY is available to the WebSocket proxy (the SvelteKit build inlines it separately).
-try {
-	process.loadEnvFile('.env');
-} catch {
-	/* no .env: rely on the real environment */
-}
-const { attachGeminiLiveProxy, cookieAuthorizer, cookieToolRunner } = await import('./src/lib/server/geminiLiveProxy.js');
-
 const server = http
 	.createServer((req, res) => {
 		if (!req.headers['x-forwarded-proto']) req.headers['x-forwarded-proto'] = 'http';
@@ -31,12 +23,5 @@ const server = http
 			res.end('Not found');
 		});
 	});
-
-// Gemini Live WebSocket proxy at /api/live
-attachGeminiLiveProxy(server, {
-	apiKey: (process.env.GEMINI_API_KEY ?? '').trim(),
-	authorize: cookieAuthorizer(() => `http://127.0.0.1:${port}`),
-	runTool: cookieToolRunner(() => `http://127.0.0.1:${port}`)
-});
 
 server.listen(port, () => console.log(`TurnoListo running at http://localhost:${port}`));

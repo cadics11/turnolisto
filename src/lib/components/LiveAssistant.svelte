@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { GoogleGenAI, Modality, type Session } from '@google/genai';
 	import type { OpeningCard } from '#lib/types.ts';
 
 	type IntakeFields = {
@@ -52,7 +53,11 @@
 	let typed = $state('');
 	const active = $derived(status !== 'disconnected');
 
-	let ws: WebSocket | null = null;
+	// Direct connection to Gemini Live, opened with a short-lived token from /api/live/token.
+	let session: Session | null = null;
+	let connectGen = 0;
+	// What the tool endpoint needs to remember between calls (collected fields, openings read aloud).
+	let toolState: { fields: Record<string, unknown>; openings: string[] } = { fields: {}, openings: [] };
 	let micCtx: AudioContext | null = null;
 	let micStream: MediaStream | null = null;
 	let micNode: AudioWorkletNode | null = null;
@@ -138,8 +143,63 @@ registerProcessor('pcm-capture', Pcm);`;
 		lastRole = role;
 	}
 
-	function send(msg: object) {
-		if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	function send(msg: any) {
+		if (msg.type === 'state') {
+			toolState.fields = msg.fields ?? {};
+			return;
+		}
+		if (!session) return;
+		try {
+			if (msg.type === 'audio') session.sendRealtimeInput({ audio: { data: msg.data, mimeType: 'audio/pcm;rate=16000' } });
+			else if (msg.type === 'audioEnd') session.sendRealtimeInput({ audioStreamEnd: true });
+			else if (msg.type === 'text') session.sendRealtimeInput({ text: String(msg.text).slice(0, 2000) });
+		} catch {
+			/* session already closed */
+		}
+	}
+
+	// Runs the model's function calls through the app (session cookie, so roles and validation apply).
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	async function runToolCalls(calls: { id?: string; name?: string; args?: Record<string, unknown> }[]) {
+		const functionResponses: { id?: string; name?: string; response: Record<string, unknown> }[] = [];
+		for (const call of calls) {
+			let response: Record<string, unknown>;
+			try {
+				const res = await fetch('/api/live/tool', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ name: call.name, args: call.args ?? {}, state: toolState })
+				});
+				if (!res.ok) throw new Error(`tool endpoint answered ${res.status}`);
+				const out = await res.json();
+				response = out.response ?? { ok: true };
+				if (out.fields) {
+					toolState.fields = out.fields;
+					onServerMessage({ type: 'intake', fields: out.fields, done: Boolean(out.done) });
+				}
+				if (out.openings) {
+					// Remember which slots were read aloud so "number 2" maps to the right one.
+					toolState.openings = out.openings.map((o: { slotId: string }) => o.slotId);
+					onServerMessage({ type: 'openings', openings: out.openings });
+				}
+				if (out.booked) onServerMessage({ type: 'booked', code: out.booked.code });
+				if (out.waiting) onServerMessage({ type: 'waiting', code: out.waiting.code });
+				if (out.slots) onServerMessage({ type: 'slots', ...out.slots });
+			} catch (e) {
+				response = {
+					ok: false,
+					error: e instanceof Error ? e.message : String(e),
+					instruction: 'The action failed. Apologise briefly in Spanish and ask the person to try again or use the form on the screen.'
+				};
+			}
+			functionResponses.push({ id: call.id, name: call.name, response });
+		}
+		try {
+			session?.sendToolResponse({ functionResponses });
+		} catch {
+			/* session already closed */
+		}
 	}
 
 	function setIdle() {
@@ -182,12 +242,12 @@ registerProcessor('pcm-capture', Pcm);`;
 		clearTimeout(speakingTimer);
 	}
 
-	function onServerMessage(ev: MessageEvent) {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		let msg: any;
-		try {
-			msg = JSON.parse(ev.data);
-		} catch {
+	// Handles both Gemini messages (serverContent, toolCall) and the app's own events ('ready', 'intake', ...).
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	function onServerMessage(msg: any) {
+		if (msg.toolCall?.functionCalls?.length) {
+			markActivity();
+			void runToolCalls(msg.toolCall.functionCalls);
 			return;
 		}
 		// Anything the assistant sends back (speech, transcripts, results) means the conversation is alive.
@@ -245,7 +305,6 @@ registerProcessor('pcm-capture', Pcm);`;
 		const track = micStream.getAudioTracks()[0];
 		micCtx = new AudioContext({ sampleRate: 16000 });
 		if (micCtx.state === 'suspended') await micCtx.resume();
-		// Sent to the server so it shows up in logs/live.log next to the audio stats.
 		const diag = {
 			type: 'diag',
 			track: track
@@ -255,7 +314,6 @@ registerProcessor('pcm-capture', Pcm);`;
 			ua: navigator.userAgent
 		};
 		console.info('[live] mic diagnostics', diag);
-		send(diag);
 		const url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
 		try {
 			await micCtx.audioWorklet.addModule(url);
@@ -300,56 +358,91 @@ registerProcessor('pcm-capture', Pcm);`;
 		micCtx = null;
 	}
 
-	function startSession() {
+	async function startSession() {
 		if (active) return;
 		error = '';
 		notice = '';
 		status = 'connecting';
 		lines = [];
 		lastRole = null;
+		toolState = { fields: {}, openings: [] };
 		outCtx = new AudioContext({ sampleRate: 24000 });
 		playHead = 0;
-		const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-		const socket = new WebSocket(`${proto}://${location.host}/api/live?context=${context}`);
-		ws = socket;
-		socket.onmessage = onServerMessage;
-		socket.onerror = () => {
-			if (ws === socket) fail('No se pudo conectar con el asistente.');
-		};
-		socket.onclose = () => {
-			if (ws === socket) endSession(false);
-		};
-		socket.onopen = async () => {
-			micPending = true;
-			try {
-				await startMic();
-				if (ws === socket && status === 'live') status = 'listening';
-			} catch (e) {
-				// Mic unavailable: the session stays usable by text.
-				error =
-					e instanceof DOMException && e.name === 'NotAllowedError'
-						? 'Permite el micrófono para hablar. Aún puedes escribir.'
-						: 'No se pudo abrir el micrófono. Aún puedes escribir.';
-			} finally {
-				micPending = false;
-				markActivity(); // the 6 seconds start once the mic is ready
+		const gen = ++connectGen;
+		micPending = true;
+		try {
+			// The server checks the login and returns a one-use token with the prompt and tools locked in.
+			const res = await fetch('/api/live/token', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ context })
+			});
+			if (!res.ok) {
+				const body = await res.json().catch(() => null);
+				throw new Error(body?.message || 'No se pudo conectar con el asistente.');
 			}
-		};
+			const { token, model } = (await res.json()) as { token: string; model: string };
+			if (gen !== connectGen) return;
+			const ai = new GoogleGenAI({ apiKey: token, httpOptions: { apiVersion: 'v1alpha' } });
+			const s = await ai.live.connect({
+				model,
+				config: { responseModalities: [Modality.AUDIO] },
+				callbacks: {
+					onmessage: (m) => {
+						if (gen === connectGen) onServerMessage(m);
+					},
+					onerror: () => {
+						if (gen === connectGen) fail('Error en la conexión con Gemini.');
+					},
+					onclose: () => {
+						if (gen === connectGen && session) endSession(false);
+					}
+				}
+			});
+			if (gen !== connectGen) {
+				s.close();
+				return;
+			}
+			session = s;
+			onServerMessage({ type: 'ready' });
+		} catch (e) {
+			if (gen === connectGen) {
+				micPending = false;
+				fail(e instanceof Error && e.message ? e.message : 'No se pudo conectar con el asistente.');
+			}
+			return;
+		}
+		try {
+			await startMic();
+			if (gen === connectGen && (status as Status) === 'live') status = 'listening';
+		} catch (e) {
+			// Mic unavailable: the session stays usable by text.
+			error =
+				e instanceof DOMException && e.name === 'NotAllowedError'
+					? 'Permite el micrófono para hablar. Aún puedes escribir.'
+					: 'No se pudo abrir el micrófono. Aún puedes escribir.';
+		} finally {
+			micPending = false;
+			markActivity(); // the 6 seconds start once the mic is ready
+		}
 	}
 
 	function endSession(userInitiated = true) {
 		clearTimeout(speakingTimer);
 		stopSilenceWatch();
 		micPending = false;
-		if (micOn && ws?.readyState === WebSocket.OPEN) send({ type: 'audioEnd' });
+		if (micOn && session) send({ type: 'audioEnd' });
 		stopMic();
 		stopPlayback();
 		outCtx?.close().catch(() => {});
 		outCtx = null;
-		const socket = ws;
-		ws = null;
-		if (socket && socket.readyState <= WebSocket.OPEN) {
-			socket.close(1000, userInitiated ? 'user' : 'error');
+		connectGen++;
+		const closing = session;
+		session = null;
+		try {
+			closing?.close();
+		} catch {
+			/* already closed */
 		}
 		status = 'disconnected';
 	}
