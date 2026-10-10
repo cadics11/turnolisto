@@ -27,3 +27,6 @@ vite.config.ts.timestamp-*
 
 # Gemini Live logs
 logs/
+
+# Scratch API test (contained a key)
+/curl.text
