@@ -46,8 +46,17 @@
 			</div>
 			<div class="font-display text-[30px] leading-tight font-bold tracking-tight capitalize">{formatSlot(data.slot.startsAt).full}</div>
 			<p class="text-[15px] leading-relaxed text-paper/85">
-				Revisa tu SMS y responde <b>SÍ</b> para reservarlo antes de las {formatSlot(data.slot.expiresAt!).time}.
+				Responde <b>SÍ</b> por SMS o acéptalo aquí antes de las {formatSlot(data.slot.expiresAt!).time}.
 			</p>
+			<p class="text-[15px] text-paper/85">{data.slot.clinic} · {data.slot.address}</p>
+			<div class="flex gap-2.5">
+				<form method="POST" action="?/accept" use:enhance class="flex flex-1">
+					<button class="h-12 flex-1 rounded-xl bg-mint font-semibold text-ink">Reservar</button>
+				</form>
+				<form method="POST" action="?/decline" use:enhance class="flex flex-1">
+					<button class="h-12 flex-1 rounded-xl bg-white/15 font-semibold">No, gracias</button>
+				</form>
+			</div>
 		{:else if r.status === 'booked' && data.slot}
 			<div class="flex items-center gap-2 text-sm font-semibold text-mint">
 				<span class="size-2.5 rounded-full bg-mint"></span> Cita confirmada
@@ -58,6 +67,10 @@
 			<div class="font-display text-[30px] font-bold">Solicitud cancelada</div>
 		{/if}
 	</section>
+
+	{#if r.notice}
+		<p class="rounded-xl bg-warn-bg px-4 py-3 text-sm font-medium text-warn" role="status">{r.notice}</p>
+	{/if}
 
 	<section class="rounded-2xl border border-line bg-white px-4 py-1" aria-label="Detalles">
 		{#each rows as [k, v], i (k)}
@@ -85,6 +98,21 @@
 		{#if r.status === 'waiting' || r.status === 'offered'}
 			<form method="POST" action="?/cancel" use:enhance class="flex flex-1">
 				<button class="h-12 flex-1 rounded-xl bg-danger-bg font-semibold text-danger">Cancelar solicitud</button>
+			</form>
+		{:else if r.status === 'booked'}
+			<form
+				method="POST"
+				action="?/cancel"
+				use:enhance={({ cancel }) => {
+					if (!confirm('¿Cancelar tu cita? El turno se le ofrecerá a otro paciente.')) cancel();
+				}}
+				class="flex flex-1"
+			>
+				<button class="h-12 flex-1 rounded-xl bg-danger-bg font-semibold text-danger">Cancelar cita</button>
+			</form>
+		{:else}
+			<form method="POST" action="?/remove" class="flex flex-1">
+				<button class="h-12 flex-1 rounded-xl bg-danger-bg font-semibold text-danger">Quitar solicitud</button>
 			</form>
 		{/if}
 	</div>

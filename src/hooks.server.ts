@@ -19,6 +19,8 @@ const GUARDED: { prefix: string; role: 'patient' | 'clinic' }[] = [
 	{ prefix: '/solicitud', role: 'patient' },
 	{ prefix: '/sms', role: 'patient' },
 	{ prefix: '/api/intake', role: 'patient' },
+	{ prefix: '/api/openings', role: 'patient' },
+	{ prefix: '/perfil', role: 'patient' },
 	{ prefix: '/oficina', role: 'clinic' }
 ];
 

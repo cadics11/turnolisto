@@ -45,6 +45,13 @@ export async function sendSms(phone: string, body: string) {
 	}
 }
 
+/** Sends an alert to a patient unless they turned SMS alerts off in their profile. */
+export async function notifyPatient(req: { userId: string; patientPhone: string }, body: string) {
+	const user = db().users.find((u) => u.id === req.userId);
+	if (user && user.smsAlerts === false) return;
+	await sendSms(req.patientPhone, body);
+}
+
 export function logInbound(phone: string, body: string, aiNote?: string) {
 	db().sms.push({
 		id: uid(),

@@ -1,5 +1,5 @@
-import { error } from '@sveltejs/kit';
-import { cancelRequest, pendingOfferFor, queuePosition } from '#lib/server/matcher.ts';
+import { error, redirect } from '@sveltejs/kit';
+import { cancelRequest, pendingOfferFor, queuePosition, removeRequest, respondToOffer } from '#lib/server/matcher.ts';
 import { db } from '#lib/server/store.ts';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -31,6 +31,7 @@ export const load: PageServerLoad = ({ params, locals }) => {
 			preferredDays: req.preferredDays,
 			hasReferral: req.hasReferral,
 			status: req.status,
+			notice: req.notice ?? null,
 			phoneLast4: req.patientPhone.slice(-4)
 		},
 		position: req.status === 'waiting' ? queuePosition(req) : null,
@@ -41,5 +42,20 @@ export const load: PageServerLoad = ({ params, locals }) => {
 export const actions: Actions = {
 	cancel: async ({ params, locals }) => {
 		await cancelRequest(params.code, locals.user!.id);
+	},
+
+	/** Remove a cancelled request from the list for good. */
+	remove: async ({ params, locals }) => {
+		removeRequest(params.code, locals.user!.id);
+		redirect(303, '/paciente');
+	},
+
+	/** Accept the offered slot from the app (the same as replying SI by SMS). */
+	accept: async ({ params, locals }) => {
+		await respondToOffer(params.code, locals.user!.id, true);
+	},
+
+	decline: async ({ params, locals }) => {
+		await respondToOffer(params.code, locals.user!.id, false);
 	}
 };

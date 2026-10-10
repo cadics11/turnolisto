@@ -1,80 +1,73 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { PLANS, REGIONS, SPECIALTIES } from '#lib/constants.ts';
-import { runMatching } from '#lib/server/matcher.ts';
-import { db, nextCode, save, uid } from '#lib/server/store.ts';
+import { bookOpening, joinWaitlist, type RequestFields } from '#lib/server/matcher.ts';
+import { config } from '#lib/server/config.ts';
 import { phoneDigits } from '#lib/server/sms.ts';
+import { db } from '#lib/server/store.ts';
 import type { Actions, PageServerLoad } from './$types';
 
-export const load: PageServerLoad = ({ locals }) => ({
-	// Remembered from the patient's last request, to prefill the contact form.
-	saved: { name: locals.user?.name ?? '', phone: locals.user?.phone ?? '' }
-});
+/** Name and phone come from the patient profile; without them the patient is sent to finish it. */
+function profileOrRedirect(userId: string) {
+	const account = db().users.find((u) => u.id === userId);
+	const phone = phoneDigits(account?.phone ?? '');
+	if (!account || !account.name || phone.length !== 10) redirect(303, '/perfil?next=nueva');
+	return { name: account.name, phone };
+}
+
+export const load: PageServerLoad = ({ locals }) => {
+	profileOrRedirect(locals.user!.id);
+	return {
+		smsAlerts: locals.user!.smsAlerts !== false,
+		// With a Gemini key the live voice assistant is the only voice UI; without one the typed chat is the fallback.
+		liveEnabled: Boolean(config.geminiApiKey)
+	};
+};
+
+/** Validates the request fields the browser kept from the chat. */
+function parseFields(raw: FormDataEntryValue | null): RequestFields | null {
+	let fields: Record<string, unknown> = {};
+	try {
+		fields = JSON.parse(String(raw ?? '{}'));
+	} catch {
+		return null;
+	}
+	const specialty = SPECIALTIES.find((s) => s === fields.specialty);
+	const region = REGIONS.find((r) => r === fields.region);
+	const plan = PLANS.find((p) => p === fields.plan);
+	const preferredDays = typeof fields.preferredDays === 'string' ? fields.preferredDays.slice(0, 60) : '';
+	if (!specialty || !region || !plan || !preferredDays) return null;
+	return {
+		specialty,
+		region,
+		plan,
+		preferredDays,
+		hasReferral: fields.hasReferral === true,
+		town: typeof fields.town === 'string' ? fields.town.slice(0, 40) : ''
+	};
+}
+
+const BAD_FIELDS = 'Faltan datos de la solicitud. Empieza de nuevo, por favor.';
 
 export const actions: Actions = {
-	create: async ({ request, locals }) => {
-		const user = locals.user;
-		if (!user || user.role !== 'patient') redirect(303, '/');
-
+	/** The patient picked one of the openings shown in the chat. */
+	book: async ({ request, locals }) => {
+		const contact = profileOrRedirect(locals.user!.id);
 		const data = await request.formData();
-		const name = String(data.get('name') ?? '').trim().slice(0, 40);
-		const phone = phoneDigits(String(data.get('phone') ?? ''));
-		let fields: Record<string, unknown> = {};
-		try {
-			fields = JSON.parse(String(data.get('fields') ?? '{}'));
-		} catch {
-			/* handled below */
-		}
+		const fields = parseFields(data.get('fields'));
+		if (!fields) return fail(400, { message: BAD_FIELDS });
+		const r = await bookOpening(locals.user!.id, String(data.get('slot') ?? ''), fields, contact);
+		if (!r.ok) return fail(400, { message: r.message, taken: r.reason === 'taken' });
+		redirect(303, `/solicitud/${r.code}`);
+	},
 
-		const specialty = SPECIALTIES.find((s) => s === fields.specialty);
-		const region = REGIONS.find((r) => r === fields.region);
-		const plan = PLANS.find((p) => p === fields.plan);
-		const preferredDays = typeof fields.preferredDays === 'string' ? fields.preferredDays.slice(0, 60) : '';
-		const hasReferral = fields.hasReferral === true;
-		const town = typeof fields.town === 'string' ? fields.town.slice(0, 40) : '';
-
-		if (!specialty || !region || !plan || !preferredDays)
-			return fail(400, { message: 'Faltan datos de la solicitud. Empieza de nuevo, por favor.' });
-		if (!name) return fail(400, { message: 'Escribe tu nombre.' });
-		if (phone.length !== 10) return fail(400, { message: 'Escribe un teléfono de 10 dígitos, por ejemplo 787-555-0123.' });
-
-		const d = db();
-		const duplicate = d.requests.find(
-			(r) =>
-				r.userId === user.id &&
-				r.specialty === specialty &&
-				r.region === region &&
-				(r.status === 'waiting' || r.status === 'offered')
-		);
-		if (duplicate)
-			return fail(400, {
-				message: `Ya tienes una solicitud activa de ${specialty} en ${region} (${duplicate.code}). Cancélala primero si quieres cambiarla.`
-			});
-
-		// Remember contact details for next time.
-		const account = d.users.find((u) => u.id === user.id);
-		if (account) {
-			account.name = name;
-			account.phone = phone;
-		}
-
-		const code = nextCode();
-		d.requests.push({
-			id: uid(),
-			code,
-			userId: user.id,
-			specialty,
-			region,
-			town,
-			plan,
-			preferredDays,
-			hasReferral,
-			patientName: name,
-			patientPhone: phone,
-			status: 'waiting',
-			createdAt: new Date().toISOString()
-		});
-		save();
-		await runMatching();
-		redirect(303, `/solicitud/${code}`);
+	/** Nothing open (or none wanted): join the line and get alerted when a slot opens. */
+	wait: async ({ request, locals }) => {
+		const contact = profileOrRedirect(locals.user!.id);
+		const data = await request.formData();
+		const fields = parseFields(data.get('fields'));
+		if (!fields) return fail(400, { message: BAD_FIELDS });
+		const r = await joinWaitlist(locals.user!.id, fields, contact);
+		if (!r.ok) return fail(400, { message: r.message });
+		redirect(303, `/solicitud/${r.code}`);
 	}
 };

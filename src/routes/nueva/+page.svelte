@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { goto } from '$app/navigation';
 	import { tick } from 'svelte';
+	import type { OpeningCard } from '#lib/types.ts';
 	import Logo from '#lib/components/Logo.svelte';
 	import LiveAssistant from '#lib/components/LiveAssistant.svelte';
 	import { VoiceInput, speak, stopSpeaking } from '#lib/voice.svelte.ts';
@@ -30,6 +32,38 @@
 	let showTextBox = $state(false);
 	let speakReplies = $state(true);
 	let chatEl: HTMLDivElement | undefined = $state();
+	let openings = $state<OpeningCard[]>([]);
+	let loadingOpenings = $state(false);
+
+	// Once the request is complete, look for up to 3 openings the patient can pick from.
+	let searchedFor = '';
+	$effect(() => {
+		if (!done) {
+			openings = [];
+			searchedFor = '';
+			return;
+		}
+		const key = JSON.stringify(fields);
+		if (key === searchedFor) return;
+		searchedFor = key;
+		void loadOpenings();
+	});
+
+	async function loadOpenings() {
+		loadingOpenings = true;
+		try {
+			const res = await fetch('/api/openings', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ fields: $state.snapshot(fields) })
+			});
+			openings = res.ok ? (await res.json()).openings : [];
+		} catch {
+			openings = [];
+		} finally {
+			loadingOpenings = false;
+		}
+	}
 
 	const voice = new VoiceInput((text) => send(text));
 
@@ -90,16 +124,19 @@
 <main class="mx-auto flex min-h-[calc(100dvh-44px)] max-w-md flex-col gap-4 px-5 pt-5 pb-7">
 	<div class="flex items-center justify-between">
 		<Logo />
-		<label class="flex min-h-11 items-center gap-2 text-sm text-muted">
-			<input type="checkbox" bind:checked={speakReplies} class="rounded text-accent focus:ring-accent" />
-			Leer respuestas en voz alta
-		</label>
+		{#if !data.liveEnabled}
+			<label class="flex min-h-11 items-center gap-2 text-sm text-muted">
+				<input type="checkbox" bind:checked={speakReplies} class="rounded text-accent focus:ring-accent" />
+				Leer respuestas en voz alta
+			</label>
+		{/if}
 	</div>
 
 	<h1 class="font-display text-[30px] leading-tight font-bold tracking-tight">
 		¿Qué especialista necesitas?
 	</h1>
 
+	{#if !data.liveEnabled}
 	<div bind:this={chatEl} class="flex max-h-72 flex-col gap-2.5 overflow-y-auto pr-1" aria-live="polite">
 		{#each messages as m, i (i)}
 			{#if m.role === 'user'}
@@ -121,6 +158,7 @@
 			<div class="self-start rounded-[18px] border border-line bg-white px-3.5 py-3 text-sm text-muted">Pensando…</div>
 		{/if}
 	</div>
+	{/if}
 
 	<section class="flex flex-col gap-3 rounded-2xl border border-line bg-white p-4" aria-label="Tu solicitud">
 		<div class="flex items-center justify-between">
@@ -148,38 +186,62 @@
 		</p>
 	</section>
 
+	{#if data.liveEnabled}
 	<LiveAssistant
 		context="nueva"
+		hint="Dime qué especialista necesitas, en qué pueblo y qué plan médico tienes."
 		{fields}
 		onintake={(f, isDone) => {
 			fields = f;
 			done = isDone;
 		}}
+		onopenings={(list) => (openings = list)}
+		ondone={(code) => goto(`/solicitud/${code}`)}
 	/>
+	{/if}
 
 	{#if done}
-		<form
-			method="POST"
-			action="?/create"
-			use:enhance
-			class="flex flex-col gap-3 rounded-2xl border border-line bg-white p-4"
-		>
-			<input type="hidden" name="fields" value={JSON.stringify(fields)} />
-			<div class="flex flex-col gap-1.5">
-				<label for="name" class="text-[13px] font-semibold text-muted-strong">Tu nombre</label>
-				<input id="name" name="name" required autocomplete="given-name" value={data.saved.name} class="h-11 rounded-[10px] border-line-strong focus:border-accent focus:ring-accent" />
-			</div>
-			<div class="flex flex-col gap-1.5">
-				<label for="phone" class="text-[13px] font-semibold text-muted-strong">Teléfono para SMS</label>
-				<input id="phone" name="phone" type="tel" required inputmode="tel" placeholder="787-555-0123" autocomplete="tel" value={data.saved.phone} class="h-11 rounded-[10px] border-line-strong focus:border-accent focus:ring-accent" />
-			</div>
+		<section class="flex flex-col gap-3 rounded-2xl border border-line bg-white p-4" aria-label="Turnos disponibles">
+			{#if loadingOpenings}
+				<p class="text-sm text-muted">Buscando turnos…</p>
+			{:else if openings.length}
+				<h2 class="text-[15px] font-semibold">Turnos disponibles ({openings.length})</h2>
+				<p class="text-[13px] text-muted">Escoge uno. También puedes decirlo con la voz: “el número 2”.</p>
+				{#each openings as o, i (o.slotId)}
+					<form method="POST" action="?/book" use:enhance class="flex items-center justify-between gap-3 rounded-xl border border-line p-3">
+						<input type="hidden" name="fields" value={JSON.stringify(fields)} />
+						<input type="hidden" name="slot" value={o.slotId} />
+						<div class="min-w-0">
+							<div class="text-[13px] font-semibold text-accent">Opción {i + 1}{o.distance ? ` · ${o.distance}` : ''}</div>
+							<div class="font-semibold">{o.clinic}</div>
+							<div class="text-[13px] text-muted capitalize">{o.when}</div>
+							<div class="text-[13px] text-muted">{o.address}, {o.town}</div>
+						</div>
+						<button class="h-11 flex-none rounded-xl bg-accent px-4 font-semibold text-white hover:bg-accent-dark">Reservar</button>
+					</form>
+				{/each}
+			{:else}
+				<h2 class="text-[15px] font-semibold">No hay turnos abiertos ahora</h2>
+				<p class="text-[13px] leading-snug text-muted">
+					Te ponemos en la lista de espera. En cuanto se abra un turno que coincida, {data.smsAlerts ? 'te avisamos por SMS' : 'lo verás aquí en la app'} y lo reservas.
+				</p>
+			{/if}
+
 			{#if form?.message}
 				<p class="rounded-lg bg-danger-bg px-3 py-2 text-sm text-danger" role="alert">{form.message}</p>
 			{/if}
-			<button class="h-12 rounded-xl bg-accent font-semibold text-white hover:bg-accent-dark">Enviar solicitud</button>
+
+			{#if !loadingOpenings}
+				<form method="POST" action="?/wait" use:enhance>
+					<input type="hidden" name="fields" value={JSON.stringify(fields)} />
+					<button class="h-12 w-full rounded-xl {openings.length ? 'border border-line-strong font-semibold' : 'bg-accent font-semibold text-white hover:bg-accent-dark'}">
+						{openings.length ? 'Ninguno me sirve: avisarme de otros' : 'Ponerme en la lista de espera'}
+					</button>
+				</form>
+			{/if}
 			<button type="button" onclick={restart} class="min-h-11 text-sm font-medium text-accent">Empezar de nuevo</button>
-		</form>
-	{:else}
+		</section>
+	{:else if !data.liveEnabled}
 		<div class="flex-1"></div>
 		<div class="flex flex-col items-center gap-3">
 			{#if voice.supported}

@@ -13,6 +13,9 @@ export type Clinic = {
 	town: string;
 	address: string;
 	acceptedPlans: string[];
+	/** Exact office coordinates. When missing, the town center is used for distances. */
+	lat?: number | null;
+	lng?: number | null;
 };
 
 export type UserRole = 'patient' | 'clinic';
@@ -27,6 +30,11 @@ export type User = {
 	/** Patient contact details, remembered from their last request to prefill the form. */
 	name: string;
 	phone: string;
+	/** Patient preference: send alerts by SMS. When false, offers are only shown in the app. */
+	smsAlerts: boolean;
+	/** Patient's current location, used to rank openings by distance. */
+	lat: number | null;
+	lng: number | null;
 	createdAt: string;
 };
 
@@ -54,6 +62,8 @@ export type PatientRequest = {
 	/** Private: 10 digits, e.g. 7875550101. */
 	patientPhone: string;
 	status: RequestStatus;
+	/** Shown to the patient, e.g. when a clinic cancelled their appointment. */
+	notice?: string;
 	createdAt: string;
 };
 
@@ -112,6 +122,11 @@ export function db(): DB {
 		if (fs.existsSync(FILE)) {
 			// Merge over defaults so files written by older versions still load.
 			g.__turnolistoDb = { ...empty(), ...(JSON.parse(fs.readFileSync(FILE, 'utf8')) as Partial<DB>) };
+			for (const u of g.__turnolistoDb.users) {
+				u.smsAlerts ??= true;
+				u.lat ??= null;
+				u.lng ??= null;
+			}
 		} else {
 			g.__turnolistoDb = empty();
 			save();
@@ -158,6 +173,9 @@ export function createUser(username: string, role: UserRole, clinicId: string | 
 		clinicId,
 		name: '',
 		phone: '',
+		smsAlerts: true,
+		lat: null,
+		lng: null,
 		createdAt: new Date().toISOString()
 	};
 	db().users.push(user);

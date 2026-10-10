@@ -1,8 +1,10 @@
 import { error, fail } from '@sveltejs/kit';
 import { PLANS } from '#lib/constants.ts';
+import { parseCoordsForm } from '#lib/geo.ts';
 import { parseClinicCommand } from '#lib/server/ai.ts';
+import { config } from '#lib/server/config.ts';
 import { llmEnabled } from '#lib/server/llm.ts';
-import { runMatching } from '#lib/server/matcher.ts';
+import { clinicCancelBooking, runMatching } from '#lib/server/matcher.ts';
 import { addSlots } from '#lib/server/slots.ts';
 import { db, save, type Clinic } from '#lib/server/store.ts';
 import type { Actions, PageServerLoad } from './$types';
@@ -56,7 +58,9 @@ export const load: PageServerLoad = ({ locals }) => {
 		},
 		waitingMatching: sameNeed.filter((r) => clinic.acceptedPlans.includes(r.plan)).length,
 		waitingOtherPlans: sameNeed.filter((r) => !clinic.acceptedPlans.includes(r.plan)).length,
-		aiEnabled: llmEnabled()
+		aiEnabled: llmEnabled(),
+		// With a Gemini key the live voice assistant replaces the browser mic and command box.
+		liveEnabled: Boolean(config.geminiApiKey)
 	};
 };
 
@@ -70,6 +74,18 @@ export const actions: Actions = {
 		save();
 		await runMatching();
 		return { message: 'Planes actualizados.' };
+	},
+
+	location: async ({ request, locals }) => {
+		const f = await request.formData();
+		const clinic = getClinic(locals.user);
+		const loc = parseCoordsForm(f.get('lat'), f.get('lng'));
+		if ('error' in loc) return fail(400, { message: loc.error });
+		clinic.lat = loc.coords?.lat ?? null;
+		clinic.lng = loc.coords?.lng ?? null;
+		save();
+		await runMatching();
+		return { message: loc.coords ? 'Ubicación guardada.' : 'Ubicación quitada: se usa el centro del pueblo.' };
 	},
 
 	publish: async ({ request, locals }) => {
@@ -108,6 +124,14 @@ export const actions: Actions = {
 		addSlots(clinic, cmd.startsAt, cmd.durationMin);
 		await runMatching();
 		return { message: `Entendido: ${cmd.summary}. Ya está buscando pacientes.`, heard: text };
+	},
+
+	cancelBooking: async ({ request, locals }) => {
+		const clinic = getClinic(locals.user);
+		const f = await request.formData();
+		const ok = await clinicCancelBooking(clinic.id, String(f.get('slot') ?? ''));
+		if (!ok) return fail(400, { message: 'Esa cita ya no se puede cancelar.' });
+		return { message: 'Cita cancelada. El paciente fue avisado y sigue en la fila.' };
 	},
 
 	remove: async ({ request, locals }) => {

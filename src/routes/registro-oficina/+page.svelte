@@ -6,6 +6,32 @@
 	let { data, form }: PageProps = $props();
 	const field = 'h-11 rounded-[10px] border-line-strong focus:border-accent focus:ring-accent';
 	const label = 'text-[13px] font-semibold text-muted-strong';
+
+	let lat = $state('');
+	let lng = $state('');
+	let locating = $state(false);
+	let locError = $state('');
+
+	function useMyLocation() {
+		locError = '';
+		if (!navigator.geolocation) {
+			locError = 'Tu navegador no permite obtener la ubicación.';
+			return;
+		}
+		locating = true;
+		navigator.geolocation.getCurrentPosition(
+			(pos) => {
+				lat = pos.coords.latitude.toFixed(5);
+				lng = pos.coords.longitude.toFixed(5);
+				locating = false;
+			},
+			() => {
+				locError = 'No pudimos obtener la ubicación. Escribe las coordenadas.';
+				locating = false;
+			},
+			{ timeout: 10000 }
+		);
+	}
 </script>
 
 <svelte:head><title>Registrar oficina · TurnoListo</title></svelte:head>
@@ -46,6 +72,18 @@
 			<label for="address" class={label}>Dirección</label>
 			<input id="address" name="address" required maxlength="120" value={form?.address ?? ''} class={field} />
 		</div>
+		<fieldset class="flex flex-col gap-2">
+			<legend class={label}>Ubicación de la oficina (opcional)</legend>
+			<p class="text-[13px] text-muted">Con las coordenadas calculamos a cuántas millas está cada paciente. Si no las pones, usamos el centro del pueblo.</p>
+			<div class="grid grid-cols-2 gap-2.5">
+				<input name="lat" inputmode="decimal" placeholder="Latitud 18.4655" aria-label="Latitud" bind:value={lat} class={field} />
+				<input name="lng" inputmode="decimal" placeholder="Longitud -66.1057" aria-label="Longitud" bind:value={lng} class={field} />
+			</div>
+			<button type="button" onclick={useMyLocation} disabled={locating} class="min-h-11 rounded-xl border border-line-strong text-sm font-semibold disabled:opacity-50">
+				{locating ? 'Buscando…' : 'Usar la ubicación de este dispositivo'}
+			</button>
+			{#if locError}<p class="text-sm text-danger" role="alert">{locError}</p>{/if}
+		</fieldset>
 		<fieldset class="flex flex-col gap-2">
 			<legend class={label}>Planes que aceptas</legend>
 			<div class="flex flex-wrap gap-2">

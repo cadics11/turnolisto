@@ -27,7 +27,8 @@ export const actions: Actions = {
 		user ??= createUser(username, 'patient');
 
 		startSession(cookies, user.id, url.protocol === 'https:');
-		redirect(303, homeFor(user.role));
+		// New accounts finish their profile (name, SMS preference, location) first.
+		redirect(303, user.name ? homeFor(user.role) : '/perfil');
 	},
 
 	/** Clinic: signs in with the username it registered. */

@@ -1,5 +1,6 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { PLANS, SPECIALTIES, TOWN_LABEL, TOWN_REGION } from '#lib/constants.ts';
+import { parseCoordsForm } from '#lib/geo.ts';
 import { homeFor, startSession } from '#lib/server/auth.ts';
 import { cleanUsername, createUser, db, findUser, save, uid } from '#lib/server/store.ts';
 import type { Actions, PageServerLoad } from './$types';
@@ -40,6 +41,9 @@ export const actions: Actions = {
 		if (!address) return fail(400, { ...values, message: 'Escribe la dirección de la oficina.' });
 		if (!plans.length) return fail(400, { ...values, message: 'Escoge al menos un plan médico que aceptas.' });
 
+		const loc = parseCoordsForm(f.get('lat'), f.get('lng'));
+		if ('error' in loc) return fail(400, { ...values, message: loc.error });
+
 		const clinic = {
 			id: uid(),
 			name,
@@ -47,7 +51,9 @@ export const actions: Actions = {
 			region,
 			town: TOWN_LABEL[townKey],
 			address,
-			acceptedPlans: plans
+			acceptedPlans: plans,
+			lat: loc.coords?.lat ?? null,
+			lng: loc.coords?.lng ?? null
 		};
 		db().clinics.push(clinic);
 		save();

@@ -97,6 +97,17 @@
 
 	<div class="flex flex-wrap items-start gap-6">
 		<div class="flex min-w-0 flex-[1_1_340px] flex-col gap-4">
+			<form method="POST" action="?/location" use:enhance={() => async ({ update }) => { await update({ reset: false }); }} class="flex flex-col gap-2.5 rounded-[18px] border border-line bg-white p-5">
+				<h2 class="font-semibold">Ubicación de la oficina</h2>
+				<p class="text-[13px] text-muted">Se usa para decirle al paciente a cuántas millas estás. Vacío = centro de {data.clinic.town}.</p>
+				<div class="grid grid-cols-2 gap-2.5">
+					<input name="lat" inputmode="decimal" placeholder="Latitud" aria-label="Latitud" value={data.clinic.lat ?? ''} class="h-11 rounded-[10px] border-line-strong focus:border-accent focus:ring-accent" />
+					<input name="lng" inputmode="decimal" placeholder="Longitud" aria-label="Longitud" value={data.clinic.lng ?? ''} class="h-11 rounded-[10px] border-line-strong focus:border-accent focus:ring-accent" />
+				</div>
+				<button class="h-11 rounded-xl border border-line-strong font-semibold">Guardar ubicación</button>
+			</form>
+
+			{#if !data.liveEnabled}
 			<section class="flex flex-col gap-3.5 rounded-[18px] bg-ink p-5 text-paper">
 				<h2 class="font-semibold">Abrir turnos por voz</h2>
 				<div class="flex items-center gap-3.5">
@@ -123,8 +134,9 @@
 					<p class="text-xs text-paper/60">Modo sin IA: entiende frases simples. Añade LLM_API_KEY para más flexibilidad.</p>
 				{/if}
 			</section>
-
-			<LiveAssistant context="oficina" onslots={() => invalidateAll()} />
+			{:else}
+			<LiveAssistant context="oficina" hint="Por ejemplo: “Abre tres turnos el martes de 2 a 4”." onslots={() => invalidateAll()} />
+			{/if}
 
 			<form method="POST" action="?/publish" use:enhance={() => async ({ update }) => { await update({ reset: false }); }} class="flex flex-col gap-3.5 rounded-[18px] border border-line bg-white p-5">
 				<h2 class="font-semibold">O hazlo a mano</h2>
@@ -194,6 +206,19 @@
 								<span class="rounded-full px-2.5 py-1.5 text-[13px] font-semibold {statusStyle[s.status]}">
 									{s.status === 'open' ? 'Abierto · buscando' : s.status === 'offered' ? `Ofrecido · ${minutesLeft(s.offerExpiresAt)} min` : 'Reservado'}
 								</span>
+								{#if s.status === 'booked'}
+									<form
+										method="POST"
+										action="?/cancelBooking"
+										use:enhance={({ cancel }) => {
+											if (!confirm('¿Cancelar esta cita? El paciente será avisado y volverá a la fila.')) cancel();
+											return async ({ update }) => { await update({ reset: false }); };
+										}}
+									>
+										<input type="hidden" name="slot" value={s.id} />
+										<button class="min-h-9 rounded-lg px-2.5 text-[13px] font-semibold text-danger hover:bg-danger-bg">Cancelar cita</button>
+									</form>
+								{/if}
 								{#if s.status === 'open'}
 									<form method="POST" action="?/remove" use:enhance>
 										<input type="hidden" name="slot" value={s.id} />

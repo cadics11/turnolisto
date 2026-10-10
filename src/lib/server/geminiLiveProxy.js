@@ -59,7 +59,12 @@ function buildInstructions(now) {
 			'Necesitas cinco datos: especialidad, pueblo o área, plan médico, días preferidos y si ya tiene el referido de su médico primario.',
 			'Cada vez que el paciente te dé uno o más datos, llama a la función update_request con lo que dijo (solo los datos nuevos). La función te dirá qué falta y qué preguntar; sigue esas indicaciones.',
 			'Haz una sola pregunta a la vez, con frases cortas, en español. No hables de funciones ni de procesos internos.',
-			'No pidas el nombre ni el teléfono por voz: el paciente los escribe en el formulario de la pantalla.',
+			'No pidas el nombre ni el teléfono: ya están en el perfil del paciente.',
+			'REGLA ESTRICTA: solo puedes mencionar oficinas, médicos, direcciones, horarios y distancias que te devuelva la función find_openings en esta conversación. Nunca inventes ni recomiendes médicos, clínicas, hospitales, teléfonos o páginas web que no vengan de esa función, y no uses tu conocimiento general para sugerir lugares.',
+			'No hables de turnos ni de oficinas antes de que find_openings te devuelva resultados. Al leer los turnos usa el texto que te da la función, sin añadir ni cambiar nada.',
+			'Si el paciente pregunta por un médico u oficina en particular, o por algo que no sea pedir una cita, responde que solo puedes ayudar con los turnos de las oficinas registradas en TurnoListo y vuelve a la pregunta pendiente.',
+			'Cuando tengas los cinco datos, llama a find_openings. Si hay turnos, léelos en voz alta (máximo 3, con número, oficina, pueblo, distancia en millas, fecha y hora) y pregunta cuál quiere. Cuando elija, llama a choose_opening con su número.',
+			'Si no hay turnos, o no quiere ninguno, ofrece ponerlo en lista de espera: cuando se abra un turno recibirá un aviso para reservarlo. Si acepta, llama a join_waitlist.',
 			'Nunca guardes ni repitas síntomas, diagnósticos o medicamentos. No des consejo médico ni juzgues urgencia. Si describe una emergencia, llama a update_request con emergency=true y sigue sus indicaciones.'
 		].join(' '),
 		oficina: [
@@ -74,7 +79,10 @@ function buildInstructions(now) {
 
 const str = (/** @type {string} */ description) => ({ type: Type.STRING, description });
 
-/** Function declarations per page. The app validates every value again when the call runs. */
+/**
+ * Function declarations per page. The app validates every value again when the call runs.
+ * @type {Record<string, import('@google/genai').FunctionDeclaration[]>}
+ */
 const TOOLS = {
 	nueva: [
 		{
@@ -97,6 +105,29 @@ const TOOLS = {
 					emergency: { type: Type.BOOLEAN, description: 'true solo si describe una emergencia médica o de salud mental.' }
 				}
 			}
+		},
+		{
+			name: 'find_openings',
+			description:
+				'Busca hasta 3 turnos abiertos que coincidan con la solicitud (especialidad, plan y cercanía). Llámala cuando ya estén los cinco datos.',
+			parameters: { type: Type.OBJECT, properties: {} }
+		},
+		{
+			name: 'choose_opening',
+			description: 'Reserva el turno que el paciente eligió entre los que acabas de leer.',
+			parameters: {
+				type: Type.OBJECT,
+				properties: {
+					number: { type: Type.INTEGER, description: 'Número del turno elegido: 1, 2 o 3.' }
+				},
+				required: ['number']
+			}
+		},
+		{
+			name: 'join_waitlist',
+			description:
+				'Pone al paciente en lista de espera cuando no hay turnos o no quiso ninguno. Recibirá un aviso cuando se abra uno.',
+			parameters: { type: Type.OBJECT, properties: {} }
 		}
 	],
 	oficina: [
@@ -128,7 +159,7 @@ export function cookieToolRunner(getBaseUrl) {
 		/** @type {import('node:http').IncomingMessage} */ req,
 		/** @type {string} */ name,
 		/** @type {Record<string, unknown>} */ args,
-		/** @type {{ fields: Record<string, unknown> }} */ state
+		/** @type {{ fields: Record<string, unknown>, openings: string[] }} */ state
 	) => {
 		const base = getBaseUrl();
 		const res = await fetch(`${base}/api/live/tool`, {
@@ -195,8 +226,8 @@ export function attachGeminiLiveProxy(httpServer, { apiKey, authorize, runTool, 
 	 */
 	function onConnection(ws, context, req) {
 		/** Fields collected so far in this session (patient intake). */
-		/** @type {{ fields: Record<string, unknown> }} */
-		const state = { fields: {} };
+		/** @type {{ fields: Record<string, unknown>, openings: string[] }} */
+		const state = { fields: {}, openings: [] };
 		const id = String(nextId++);
 		const stats = { audioIn: 0, audioInBytes: 0, audioOut: 0, audioOutBytes: 0 };
 		const started = Date.now();
@@ -221,6 +252,7 @@ export function attachGeminiLiveProxy(httpServer, { apiKey, authorize, runTool, 
 			model: useModel,
 			config: {
 				responseModalities: [Modality.AUDIO], // the Live API allows one modality per session
+				temperature: 0.3, // low: stick to the data from the tools instead of improvising
 				inputAudioTranscription: {},
 				outputAudioTranscription: {}, // text version of what the model says
 				systemInstruction: (() => {
@@ -295,6 +327,13 @@ export function attachGeminiLiveProxy(httpServer, { apiKey, authorize, runTool, 
 						state.fields = out.fields;
 						send({ type: 'intake', fields: out.fields, done: Boolean(out.done) });
 					}
+					if (out.openings) {
+						// Remember which slots were read aloud so "number 2" maps to the right one.
+						state.openings = out.openings.map((/** @type {{ slotId: string }} */ o) => o.slotId);
+						send({ type: 'openings', openings: out.openings });
+					}
+					if (out.booked) send({ type: 'booked', code: out.booked.code });
+					if (out.waiting) send({ type: 'waiting', code: out.waiting.code });
 					if (out.slots) send({ type: 'slots', ...out.slots });
 					log(id, 'tool result', { name, ...(out.fields ? { fields: out.fields, done: out.done } : {}), response });
 				} catch (e) {
